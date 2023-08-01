@@ -671,14 +671,14 @@ func (kv *txnTiKV) removeTiKVMeta(ctx context.Context, key string) error {
 
 	txn, err := beginTxn(kv.txn)
 	if err != nil {
-		return errors.Wrap(err, "Failed to build transaction for putTiKVMeta")
+		return errors.Wrap(err, "Failed to build transaction for removeTiKVMeta")
 	}
 	// Defer a rollback only if the transaction hasn't been committed
 	defer rollbackOnFailure(err, txn)
 
 	err = txn.Delete([]byte(key))
 	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("Failed to get value for key %s in putTiKVMeta", key))
+		return errors.Wrap(err, fmt.Sprintf("Failed to remove key %s in removeTiKVMeta", key))
 	}
 	err = commitTxn(txn, ctx1)
 
