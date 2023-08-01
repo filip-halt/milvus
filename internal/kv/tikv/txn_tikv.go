@@ -101,7 +101,7 @@ func (kv *txnTiKV) Has(key string) (bool, error) {
 			return false, errors.Wrap(err, fmt.Sprintf("Failed to create txn for Has of key %s", key))
 		}
 	}
-	CheckElapseAndWarn(start, "Slow tikv operation Has()", zap.String("key", key))
+	CheckElapseAndWarn(start, "Slow txnTiKV Has() operation", zap.String("key", key))
 	return true, nil
 }
 
@@ -147,7 +147,7 @@ func (kv *txnTiKV) HasPrefix(prefix string) (bool, error) {
 	if err = kv.executeTxn(txn, ctx); err != nil {
 		return false, errors.Wrap(err, fmt.Sprintf("Failed to commit txn for HasPrefix of prefix %s", prefix))
 	}
-	CheckElapseAndWarn(start, "Slow load with HasPrefix", zap.String("prefix", prefix))
+	CheckElapseAndWarn(start, "Slow txnTiKV HasPrefix() operation", zap.String("prefix", prefix))
 	return r, nil
 }
 
@@ -169,7 +169,7 @@ func (kv *txnTiKV) Load(key string) (string, error) {
 	if err != nil {
 		return "", errors.Wrap(err, fmt.Sprintf("Failed to read key %s", key))
 	}
-	CheckElapseAndWarn(start, "Slow tikv operation load", zap.String("key", key))
+	CheckElapseAndWarn(start, "Slow txnTiKV Load() operation", zap.String("key", key))
 	return val, nil
 }
 
@@ -205,7 +205,7 @@ func (kv *txnTiKV) MultiLoad(keys []string) ([]string, error) {
 	if len(invalid) != 0 {
 		err = fmt.Errorf("there are invalid keys: %s", invalid)
 	}
-	CheckElapseAndWarn(start, "Slow tikv operation multi load", zap.Any("keys", keys))
+	CheckElapseAndWarn(start, "Slow txnTiKV MultiLoad() opeartion", zap.Any("keys", keys))
 	return values, err
 }
 
@@ -251,7 +251,7 @@ func (kv *txnTiKV) LoadWithPrefix(prefix string) ([]string, []string, error) {
 	if err != nil {
 		return nil, nil, errors.Wrap(err, fmt.Sprintf("Failed to commit txn for LoadWithPrefix %s", prefix))
 	}
-	CheckElapseAndWarn(start, "Slow LoadWithPrefix", zap.String("prefix", prefix))
+	CheckElapseAndWarn(start, "Slow txnTiKV LoadWithPrefix() operation", zap.String("prefix", prefix))
 	return keys, values, nil
 }
 
@@ -298,7 +298,7 @@ func (kv *txnTiKV) MultiSave(kvs map[string]string) error {
 		return errors.Wrap(err, "Failed to commit for MultiSave")
 	}
 
-	CheckElapseAndWarn(start, "Slow tikv operation MultiSave", zap.Any("kvs", kvs))
+	CheckElapseAndWarn(start, "Slow txnTiKV MultiSave() operation", zap.Any("kvs", kvs))
 	return nil
 }
 
@@ -318,7 +318,6 @@ func (kv *txnTiKV) Remove(key string) error {
 // MultiRemove removes the input keys in transaction manner.
 func (kv *txnTiKV) MultiRemove(keys []string) error {
 	start := time.Now()
-
 	ctx, cancel := context.WithTimeout(context.Background(), RequestTimeout)
 	defer cancel()
 
@@ -345,7 +344,7 @@ func (kv *txnTiKV) MultiRemove(keys []string) error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to commit for MultiRemove")
 	}
-	CheckElapseAndWarn(start, "Slow tikv operation MultiRemove", zap.Strings("keys", keys))
+	CheckElapseAndWarn(start, "Slow txnTiKV MultiRemove() operation", zap.Strings("keys", keys))
 	return nil
 }
 
@@ -365,7 +364,7 @@ func (kv *txnTiKV) RemoveWithPrefix(prefix string) error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to DeleteRange for RemoveWithPrefix")
 	}
-	CheckElapseAndWarn(start, "Slow tikv operation remove with prefix", zap.String("prefix", prefix))
+	CheckElapseAndWarn(start, "Slow txnTiKV RemoveWithPrefix() operation", zap.String("prefix", prefix))
 	return nil
 }
 
@@ -404,7 +403,7 @@ func (kv *txnTiKV) MultiSaveAndRemove(saves map[string]string, removals []string
 	if err != nil {
 		return errors.Wrap(err, "Failed to commit for MultiSaveAndRemove")
 	}
-	CheckElapseAndWarn(start, "Slow tikv operation multi save and remove", zap.Any("saves", saves), zap.Strings("removals", removals))
+	CheckElapseAndWarn(start, "Slow txnTiKV MultiSaveAndRemove() operation", zap.Any("saves", saves), zap.Strings("removals", removals))
 	return nil
 }
 
@@ -457,7 +456,7 @@ func (kv *txnTiKV) MultiRemoveWithPrefix(prefixes []string) error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to commit for MultiRemoveWithPrefix")
 	}
-	CheckElapseAndWarn(start, "Slow tikv operation multi remove with prefix", zap.Strings("keys", prefixes))
+	CheckElapseAndWarn(start, "Slow txnTiKV MultiRemoveWithPrefix() operation", zap.Strings("keys", prefixes))
 	return nil
 }
 
@@ -520,7 +519,7 @@ func (kv *txnTiKV) MultiSaveAndRemoveWithPrefix(saves map[string]string, removal
 	if err != nil {
 		return errors.Wrap(err, "Failed to commit for MultiSaveAndRemoveWithPrefix")
 	}
-	CheckElapseAndWarn(start, "Slow tikv operation multi save and move with prefix", zap.Any("saves", saves), zap.Strings("removals", removals))
+	CheckElapseAndWarn(start, "Slow txnTiKV MultiSaveAndRemoveWithPrefix() operation", zap.Any("saves", saves), zap.Strings("removals", removals))
 	return nil
 }
 
@@ -567,18 +566,8 @@ func (kv *txnTiKV) WalkWithPrefix(prefix string, paginationSize int, fn func([]b
 		return errors.Wrap(err, "Failed to commit for WalkWithPagination")
 	}
 
-	CheckElapseAndWarn(start, "Slow tikv operation(WalkWithPagination)", zap.String("prefix", prefix))
+	CheckElapseAndWarn(start, "Slow txnTiKV WalkWithPagination() operation", zap.String("prefix", prefix))
 	return nil
-}
-
-// CheckElapseAndWarn checks the elapsed time and warns if it is too long.
-func CheckElapseAndWarn(start time.Time, message string, fields ...zap.Field) bool {
-	elapsed := time.Since(start)
-	if elapsed.Milliseconds() > 2000 {
-		log.Warn(message, append([]zap.Field{zap.String("time spent", elapsed.String())}, fields...)...)
-		return true
-	}
-	return false
 }
 
 func (kv *txnTiKV) executeTxn(txn *transaction.KVTxn, ctx context.Context) error {
@@ -697,4 +686,14 @@ func (kv *txnTiKV) removeTiKVMeta(ctx context.Context, key string) error {
 
 func (kv *txnTiKV) CompareVersionAndSwap(key string, version int64, target string) (bool, error) {
 	return false, fmt.Errorf("Unimplemented! CompareVersionAndSwap is under deprecation")
+}
+
+// CheckElapseAndWarn checks the elapsed time and warns if it is too long.
+func CheckElapseAndWarn(start time.Time, message string, fields ...zap.Field) bool {
+	elapsed := time.Since(start)
+	if elapsed.Milliseconds() > 2000 {
+		log.Warn(message, append([]zap.Field{zap.String("time spent", elapsed.String())}, fields...)...)
+		return true
+	}
+	return false
 }
