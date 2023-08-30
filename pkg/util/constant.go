@@ -23,7 +23,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/common"
 )
 
-// Meta Prefix consts
+// MetaStore Globals
 const (
 	MetaStoreTypeEtcd  = "etcd"
 	MetaStoreTypeMysql = "mysql"
@@ -41,7 +41,11 @@ const (
 
 	SegmentIndexPrefix = "segment-index"
 	FieldIndexPrefix   = "field-index"
+)
 
+// Other Globals
+
+const (
 	HeaderAuthorize = "authorization"
 	// HeaderSourceID identify requests from Milvus members and client requests
 	HeaderSourceID = "sourceId"

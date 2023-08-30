@@ -4,10 +4,13 @@ import (
 	"context"
 
 	"github.com/cockroachdb/errors"
+	"github.com/milvus-io/milvus/internal/kv"
 	smsgstream "github.com/milvus-io/milvus/internal/mq/msgstream"
 	"github.com/milvus-io/milvus/internal/storage"
+	metastore "github.com/milvus-io/milvus/pkg/kv"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/util"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"go.uber.org/zap"
 )
@@ -27,13 +30,20 @@ type mqEnable struct {
 	Kafka   bool
 }
 
+const (
+	metaTypeEtcd = util.MetaStoreTypeEtcd
+	metaTypeTikv = util.MetaStoreTypeTiKV
+)
+
 // DefaultFactory is a factory that produces instances of storage.ChunkManager and message queue.
 type DefaultFactory struct {
 	standAlone          bool
 	chunkManagerFactory storage.Factory
 	msgStreamFactory    msgstream.Factory
+	metaFactory         metastore.Factory
 }
 
+// TODO: Add for metafactory
 // Only for test
 func NewDefaultFactory(standAlone bool) *DefaultFactory {
 	return &DefaultFactory{
@@ -44,6 +54,7 @@ func NewDefaultFactory(standAlone bool) *DefaultFactory {
 	}
 }
 
+// TODO: Add for metafactory
 // Only for test
 func MockDefaultFactory(standAlone bool, params *paramtable.ComponentParam) *DefaultFactory {
 	return &DefaultFactory{
@@ -74,6 +85,10 @@ func (f *DefaultFactory) Init(params *paramtable.ComponentParam) {
 
 	// initialize mq client or embedded mq.
 	if err := f.initMQ(f.standAlone, params); err != nil {
+		panic(err)
+	}
+
+	if err := f.initMeta(params); err != nil {
 		panic(err)
 	}
 }
@@ -156,8 +171,32 @@ func (f *DefaultFactory) NewPersistentStorageChunkManager(ctx context.Context) (
 	return f.chunkManagerFactory.NewPersistentStorageChunkManager(ctx)
 }
 
+func (f *DefaultFactory) NewMetaKv(rootPath string) kv.MetaKv {
+	return f.metaFactory.NewMetaKv(rootPath)
+}
+
+func (f *DefaultFactory) initMeta(params *paramtable.ComponentParam) error {
+	metaType := params.MetaStoreCfg.MetaStoreType.GetValue()
+	log.Info("try to init mq", zap.String("metaType", metaType))
+	var err error
+	switch metaType {
+	case metaTypeEtcd:
+		f.metaFactory, err = metastore.NewETCDFactory(&params.ServiceParam)
+	case metaTypeTikv:
+		f.metaFactory, err = metastore.NewTiKVFactory(&params.ServiceParam)
+	default:
+		return errors.Newf("meta type %s is invalid", metaType)
+	}
+	if err != nil {
+		return errors.Wrapf(err, "Failed to init metastore factory")
+	}
+	return nil
+
+}
+
 type Factory interface {
 	msgstream.Factory
+	metastore.Factory
 	Init(p *paramtable.ComponentParam)
 	NewPersistentStorageChunkManager(ctx context.Context) (storage.ChunkManager, error)
 }
