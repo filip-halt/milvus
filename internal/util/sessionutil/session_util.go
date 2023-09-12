@@ -223,12 +223,13 @@ func NewSession(ctx context.Context, metaRoot string, client *clientv3.Client, o
 
 	session.apply(opts...)
 
-	session.UpdateRegistered(false)
+	session.UpdateRegistered(false) // Set the session to unregistered
 
 	connectEtcdFn := func() error {
 		log.Debug("Session try to connect to etcd")
 		ctx2, cancel2 := context.WithTimeout(session.ctx, 5*time.Second)
 		defer cancel2()
+		// Check if etcd is running and healthy, if error, etcd not in healthy state
 		if _, err := client.Get(ctx2, "health"); err != nil {
 			return err
 		}
@@ -252,8 +253,8 @@ func (s *Session) Init(serverName, address string, exclusive bool, triggerKill b
 	s.Address = address
 	s.Exclusive = exclusive
 	s.TriggerKill = triggerKill
-	s.checkIDExist()
-	serverID, err := s.getServerID()
+	s.checkIDExist()                 // Make sure that the consistent ID generator exists
+	serverID, err := s.getServerID() // Get the server ID for this session
 	if err != nil {
 		panic(err)
 	}
@@ -301,7 +302,10 @@ func (s *Session) getServerID() (int64, error) {
 	return nodeID, nil
 }
 
+// IDs are created by incrementing /session/id, we need to make sure a value exists.
 func (s *Session) checkIDExist() {
+	// Check if the value exists, if not set it to 1. All nodes will try to do this
+	// in order to allow getting ID
 	s.etcdCli.Txn(s.ctx).If(
 		clientv3.Compare(
 			clientv3.Version(path.Join(s.metaRoot, DefaultServiceRoot, DefaultIDKey)),
@@ -310,23 +314,29 @@ func (s *Session) checkIDExist() {
 		Then(clientv3.OpPut(path.Join(s.metaRoot, DefaultServiceRoot, DefaultIDKey), "1")).Commit()
 }
 
+// Grab the ID from ETCD and increment if grabbed.
 func (s *Session) getServerIDWithKey(key string) (int64, error) {
 	for {
+		// Get the current ID value
 		getResp, err := s.etcdCli.Get(s.ctx, path.Join(s.metaRoot, DefaultServiceRoot, key))
 		if err != nil {
 			log.Warn("Session get etcd key error", zap.String("key", key), zap.Error(err))
 			return -1, err
 		}
+		// If there is no ID then wait for the CheckIDExist to finish
 		if getResp.Count <= 0 {
 			log.Warn("Session there is no value", zap.String("key", key))
 			continue
 		}
+		// Parse the ID value
 		value := string(getResp.Kvs[0].Value)
 		valueInt, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			log.Warn("Session ParseInt error", zap.String("value", value), zap.Error(err))
 			continue
 		}
+		// Check to see if the value hasnt changed and attempt to incrament the value, if this
+		// goes through that means that value has been assigned to this session
 		txnResp, err := s.etcdCli.Txn(s.ctx).If(
 			clientv3.Compare(
 				clientv3.Value(path.Join(s.metaRoot, DefaultServiceRoot, key)),
@@ -337,16 +347,19 @@ func (s *Session) getServerIDWithKey(key string) (int64, error) {
 			log.Warn("Session Txn failed", zap.String("key", key), zap.Error(err))
 			return -1, err
 		}
-
+		// If the transaction did not succeed, retry and try to get a new ID
 		if !txnResp.Succeeded {
 			log.Warn("Session Txn unsuccessful", zap.String("key", key))
 			continue
 		}
+		// If didnt fail, the value is what was grabbed at the start
 		log.Debug("Session get serverID success", zap.String("key", key), zap.Int64("ServerId", valueInt))
 		return valueInt, nil
 	}
 }
 
+// Get the complete key, if the session isnt exclusive or is in standby, include the
+// server ID
 func (s *Session) getCompleteKey() string {
 	key := s.ServerName
 	if !s.Exclusive || (s.enableActiveStandBy && s.isStandby.Load().(bool)) {
@@ -355,6 +368,7 @@ func (s *Session) getCompleteKey() string {
 	return path.Join(s.metaRoot, DefaultServiceRoot, key)
 }
 
+// Get the session key, if it is not exclusive, include the serverID
 func (s *Session) getSessionKey() string {
 	key := s.ServerName
 	if !s.Exclusive {
@@ -363,15 +377,18 @@ func (s *Session) getSessionKey() string {
 	return path.Join(s.metaRoot, DefaultServiceRoot, key)
 }
 
+// Set the watchSessionKeyCh with a watch that looks at this sessions key
 func (s *Session) initWatchSessionCh(ctx context.Context) error {
 	var (
 		err     error
 		getResp *clientv3.GetResponse
 	)
-
+	// Store the watch ctx cancel in the session
 	ctx, cancel := context.WithCancel(ctx)
 	s.watchCancel.Store(&cancel)
 
+	// Check to see if the SessionKey exists in etcd, it needs to exist
+	// in order to start watching it
 	err = retry.Do(ctx, func() error {
 		getResp, err = s.etcdCli.Get(ctx, s.getSessionKey())
 		log.Warn("fail to get the session key from the etcd", zap.Error(err))
@@ -380,6 +397,7 @@ func (s *Session) initWatchSessionCh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Store the channel that watches this session in the session itself
 	s.watchSessionKeyCh = s.etcdCli.Watch(ctx, s.getSessionKey(), clientv3.WithRev(getResp.Header.Revision))
 	return nil
 }
@@ -404,22 +422,25 @@ func (s *Session) registerService() (<-chan *clientv3.LeaseKeepAliveResponse, er
 		s.updateStandby(true)
 	}
 	completeKey := s.getCompleteKey()
+	// Channel for getting responses of KeepAlive requests
 	var ch <-chan *clientv3.LeaseKeepAliveResponse
 	log.Debug("service begin to register to etcd", zap.String("serverName", s.ServerName), zap.Int64("ServerID", s.ServerID))
 
 	registerFn := func() error {
+		// Grant a new lease for this session
 		resp, err := s.etcdCli.Grant(s.ctx, s.sessionTTL)
 		if err != nil {
 			log.Error("register service", zap.Error(err))
 			return err
 		}
 		s.leaseID = &resp.ID
-
+		// Marshal the session info for storage in etcd
 		sessionJSON, err := json.Marshal(s)
 		if err != nil {
 			return err
 		}
-
+		// Store the marshalled session info in the complete key and attach a lease
+		// Make sure the key isnt already registered, otherwise error out
 		txnResp, err := s.etcdCli.Txn(s.ctx).If(
 			clientv3.Compare(
 				clientv3.Version(completeKey),
@@ -437,6 +458,7 @@ func (s *Session) registerService() (<-chan *clientv3.LeaseKeepAliveResponse, er
 		}
 		log.Info("put session key into etcd", zap.String("key", completeKey), zap.String("value", string(sessionJSON)))
 
+		// Create the KeepAlive channel for the Lease given above
 		keepAliveCtx, keepAliveCancel := context.WithCancel(context.Background())
 		s.keepAliveCtx = keepAliveCtx
 		s.keepAliveCancel = keepAliveCancel
@@ -458,17 +480,18 @@ func (s *Session) registerService() (<-chan *clientv3.LeaseKeepAliveResponse, er
 // processKeepAliveResponse processes the response of etcd keepAlive interface
 // If keepAlive fails for unexpected error, it will send a signal to the channel.
 func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveResponse) {
+	// Add the keepalive logic to the sessions waitgroup
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		for {
 			select {
-			case <-s.ctx.Done():
+			case <-s.ctx.Done(): // If the context was canceled, gracefully shutdown the keepalive
 				log.Warn("keep alive", zap.Error(errors.New("context done")))
 				s.cancelKeepAlive()
 				return
 			case resp, ok := <-ch:
-				if !ok {
+				if !ok { // KeepAlive was canceled on the etcd side,
 					log.Warn("session keepalive channel closed")
 
 					// if keep alive is canceled, keepAliveCtx.Err() will return a non-nil error
@@ -476,7 +499,9 @@ func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveRes
 						s.safeCloseLiveCh()
 						return
 					}
-
+					// If the Keep alive was closed by etcd, we close the keep alive channel, try
+					// to keep alive once to see if the connection exists still to etcd. If we can
+					// keep alive once we will then create a new lease.
 					log.Info("keepAlive channel close caused by etcd, try to KeepAliveOnce", zap.String("serverName", s.ServerName))
 					s.keepAliveLock.Lock()
 					defer s.keepAliveLock.Unlock()
@@ -523,6 +548,7 @@ func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveRes
 	}()
 }
 
+// Simple run of function that returns error if out of time
 func fnWithTimeout(fn func() error, d time.Duration) error {
 	if d != 0 {
 		resultChan := make(chan bool)
@@ -548,13 +574,16 @@ func fnWithTimeout(fn func() error, d time.Duration) error {
 func (s *Session) GetSessions(prefix string) (map[string]*Session, int64, error) {
 	res := make(map[string]*Session)
 	key := path.Join(s.metaRoot, DefaultServiceRoot, prefix)
+	// Grab all sessions with the passed in prefix
 	resp, err := s.etcdCli.Get(s.ctx, key, clientv3.WithPrefix(),
 		clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	if err != nil {
 		return nil, 0, err
 	}
+	// Create sessions for all the returned values
 	for _, kv := range resp.Kvs {
 		session := &Session{}
+		// Unmarshal the data recieved from etcd into the session
 		err = json.Unmarshal(kv.Value, session)
 		if err != nil {
 			return nil, 0, err

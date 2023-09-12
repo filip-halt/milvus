@@ -40,7 +40,7 @@ const (
 	QueryNodeRole = "querynode"
 	// IndexCoordRole is a constant represent IndexCoord
 	IndexCoordRole = "indexcoord"
-	// IndexNodeRole is a constant represent IndexNode
+	// DataCoordRole is a constant represent DataCoordRole
 	DataCoordRole = "datacoord"
 	// DataNodeRole is a constant represent DataNode
 	DataNodeRole = "datanode"

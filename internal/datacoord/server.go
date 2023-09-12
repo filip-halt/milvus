@@ -62,16 +62,23 @@ import (
 )
 
 const (
+	// How many times to retry connecting to the metastore servers (etcd, tikv)
 	connMetaMaxRetryTime = 100
-	allPartitionID       = 0 // partitionID means no filtering
+	// partitionID means no filtering
+	allPartitionID = 0
 )
 
 var (
 	// TODO: sunby put to config
-	enableTtChecker           = true
-	ttCheckerName             = "dataTtChecker"
-	ttMaxInterval             = 2 * time.Minute
-	ttCheckerWarnMsg          = fmt.Sprintf("Datacoord haven't received tt for %f minutes", ttMaxInterval.Minutes())
+	// Whether to enable time tick checker. Checker is used to track if no checker.Check()
+	// have been called in ttMaxInterval amount of time, and if so, warn the user.
+	enableTtChecker = true
+	// Name of the timetick checker
+	ttCheckerName = "dataTtChecker"
+	// How long to wait before warning
+	ttMaxInterval    = 2 * time.Minute
+	ttCheckerWarnMsg = fmt.Sprintf("Datacoord haven't received tt for %f minutes", ttMaxInterval.Minutes())
+	// How long to wait before flushing inactive segment (in minutes)
 	segmentTimedFlushDuration = 10.0
 )
 
@@ -82,15 +89,19 @@ type (
 	Timestamp = typeutil.Timestamp
 )
 
+// Type definition for mocking purposes
 type dataNodeCreatorFunc func(ctx context.Context, addr string, nodeID int64) (types.DataNode, error)
 
+// Type definition for mocking purposes
 type indexNodeCreatorFunc func(ctx context.Context, addr string, nodeID int64) (types.IndexNode, error)
 
+// Type definition for mocking purposes
 type rootCoordCreatorFunc func(ctx context.Context, metaRootPath string, etcdClient *clientv3.Client) (types.RootCoord, error)
 
-// makes sure Server implements `DataCoord`
+// Makes sure Server implements `DataCoord`
 var _ types.DataCoord = (*Server)(nil)
 
+// Grab the system parameters
 var Params *paramtable.ComponentParam = paramtable.Get()
 
 // Server implements `types.DataCoord`
@@ -153,10 +164,12 @@ type Server struct {
 }
 
 // ServerHelper datacoord server injection helper
+// Mainly used for testing purposes
 type ServerHelper struct {
 	eventAfterHandleDataNodeTt func()
 }
 
+// The default opeartion for ServerHelper is to do nothing
 func defaultServerHelper() ServerHelper {
 	return ServerHelper{
 		eventAfterHandleDataNodeTt: func() {},
@@ -237,7 +250,7 @@ func defaultRootCoordCreatorFunc(ctx context.Context, metaRootPath string, clien
 	return rootcoordclient.NewClient(ctx, metaRootPath, client)
 }
 
-// QuitSignal returns signal when server quits
+// Returns a read-only channel that returns signal when server quits
 func (s *Server) QuitSignal() <-chan struct{} {
 	return s.quitCh
 }
@@ -246,29 +259,36 @@ func (s *Server) QuitSignal() <-chan struct{} {
 func (s *Server) Register() error {
 	// first register indexCoord
 	s.icSession.Register()
+	// then register dataCoord
 	s.session.Register()
 	if s.enableActiveStandBy {
+		// Enter Active standby and only activate if applicable
 		err := s.session.ProcessActiveStandBy(s.activateFunc)
 		if err != nil {
 			return err
 		}
-
+		// If activated, force this indexcoord to replace old indexcoord
 		err = s.icSession.ForceActiveStandby(nil)
 		if err != nil {
 			return nil
 		}
 	}
 
+	// Increment how many nodes in system
 	metrics.NumNodes.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), typeutil.DataCoordRole).Inc()
 	log.Info("DataCoord Register Finished")
 
 	s.session.LivenessCheck(s.serverLoopCtx, func() {
-		logutil.Logger(s.ctx).Error("disconnected from etcd and exited", zap.Int64("serverID", s.session.ServerID))
+		// Callback means that the the session is expired
+		logutil.Logger(s.ctx).Error("disconnected from session and exited", zap.Int64("serverID", s.session.ServerID))
+		// If the session is expired the server needs to be stopped
 		if err := s.Stop(); err != nil {
 			logutil.Logger(s.ctx).Fatal("failed to stop server", zap.Error(err))
 		}
+		// Decrement how many nodes in system as this node is shutdown
 		metrics.NumNodes.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), typeutil.DataCoordRole).Dec()
-		// manually send signal to starter goroutine
+		// Manually kill the process running this server, for datacoord the TriggerKill
+		// is normally set to true outside of testing
 		if s.session.TriggerKill {
 			if p, err := os.FindProcess(os.Getpid()); err == nil {
 				p.Signal(syscall.SIGINT)
@@ -278,14 +298,18 @@ func (s *Server) Register() error {
 	return nil
 }
 
+// Initiate the datacoord and indexcoord sessions
 func (s *Server) initSession() error {
+	// Create a new session for the indexcoord. This sessions lets other nodes know that
+	// it exists
 	s.icSession = sessionutil.NewSession(s.ctx, Params.EtcdCfg.MetaRootPath.GetValue(), s.etcdCli)
 	if s.icSession == nil {
 		return errors.New("failed to initialize IndexCoord session")
 	}
 	s.icSession.Init(typeutil.IndexCoordRole, s.address, true, true)
+	// Set the flag for enable active standby
 	s.icSession.SetEnableActiveStandBy(s.enableActiveStandBy)
-
+	// After creating the indexcoords session, create the datacoords session
 	s.session = sessionutil.NewSession(s.ctx, Params.EtcdCfg.MetaRootPath.GetValue(), s.etcdCli)
 	if s.session == nil {
 		return errors.New("failed to initialize session")
@@ -298,10 +322,14 @@ func (s *Server) initSession() error {
 // Init change server state to Initializing
 func (s *Server) Init() error {
 	var err error
+	// Begin by initializing the 3rd party dependencies (MQ, KV, etc)
 	s.factory.Init(Params)
+	// Notify the cluster this server exists
 	if err = s.initSession(); err != nil {
 		return err
 	}
+	// If active standby is enabled, create the activation function which inits and starts
+	// the datacoord
 	if s.enableActiveStandBy {
 		s.activateFunc = func() error {
 			log.Info("DataCoord switch from standby to active, activating")
@@ -317,11 +345,12 @@ func (s *Server) Init() error {
 		log.Info("DataCoord enter standby mode successfully")
 		return nil
 	}
-
+	// If no active standby, init the datacoord immiiately
 	return s.initDataCoord()
 }
 
 func (s *Server) initDataCoord() error {
+	// Set statecode to initializing
 	s.stateCode.Store(commonpb.StateCode_Initializing)
 	var err error
 	if err = s.initRootCoordClient(); err != nil {
